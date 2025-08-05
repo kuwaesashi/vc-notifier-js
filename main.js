@@ -71,3 +71,6 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
 client.login(TOKEN);
 
+Deno.cron("Continuous Request", "*/2 * * * *", () => {
+    console.log("running...");
+});
