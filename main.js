@@ -38,7 +38,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
       const textChannel = newState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
       if (textChannel && textChannel.isTextBased()) {
         const message = await textChannel.send(
-           **${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪
+          **${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪
         );
         messageLog.set(`${newState.guild.id}-${vcName}`, message.id);
       }
