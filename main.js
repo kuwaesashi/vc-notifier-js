@@ -106,3 +106,8 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
 // Botを起動
 client.login(TOKEN);
+
+// 24時間稼働
+Deno.cron("Continuous Request", "*/2 * * * *", () => {
+    console.log("running...");
+});
