@@ -1,10 +1,10 @@
 // Discord.js の必要なクラス・定数をインポート（Deno環境対応）
-import { Client, GatewayIntentBits, Partials } from "npm:discord.js@14.14.1";
+import { Client, GatewayIntentBits, Partials, EmbedBuilder } from "npm:discord.js@14.14.1";
 
-// 環境変数から Discord Bot のトークンを取得
+// 環境変数からトークン取得
 const TOKEN = Deno.env.get("DISCORD_TOKEN");
 
-// Bot インスタンスを作成。必要な Intent を設定。
+// BOTの設定
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,            // サーバー（ギルド）情報の取得
@@ -28,15 +28,15 @@ const messageLog = new Map();
 
 // BOT起動時に一度だけ呼ばれるイベント
 client.on("ready", () => {
-  console.log(`✅ BOT起動完了: ${client.user.tag}`);
+  console.log(`BOT起動完了: ${client.user.tag}`);
 });
 
 // VCの入退室を検知するイベントハンドラ
 client.on("voiceStateUpdate", async (oldState, newState) => {
-  const member = newState.member || oldState.member; // 入退室したメンバー情報
+  const member = newState.member || oldState.member;
   if (!member) return;
 
-  // ==== 入室処理 ====
+  // 入室処理
   if (oldState.channelId !== newState.channelId && newState.channel) {
     const vcName = newState.channel.name;
 
@@ -48,9 +48,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     // 入室後のメンバーが1人だけ（つまり最初の入室者）のときのみ通知
     if (memberCount === 1) {
       // 対応するテキストチャンネルを取得（チャンネル名で取得）
-      const textChannel = newState.guild.channels.cache.find(
-        c => c.name === VC_TO_TEXT[vcName]
-      );
+      const textChannel = newState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
 
       // チャンネルが存在し、テキストベースであれば通知を送信
       if (textChannel && textChannel.isTextBased()) {
@@ -58,16 +56,13 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
           `**${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪`
         );
 
-        // 通知メッセージIDとチャンネルIDを記録（後で削除時に使う）
-        messageLog.set(`${newState.guild.id}-${vcName}`, {
-          messageId: message.id,
-          channelId: textChannel.id
-        });
+        // 通知メッセージIDを記録（後で削除時に使う）
+        messageLog.set(`${newState.guild.id}-${vcName}`, message.id);
       }
     }
   }
 
-  // ==== 退室処理 ====
+  // 退室処理
   if (oldState.channelId && oldState.channelId !== newState.channelId) {
     const vcName = oldState.channel.name;
 
@@ -78,27 +73,22 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
     // VCが空（誰もいなくなった）になった時
     if (memberCount === 0) {
-      const logKey = `${oldState.guild.id}-${vcName}`;
-      const logData = messageLog.get(logKey);
+      const messageId = messageLog.get(`${oldState.guild.id}-${vcName}`);
 
-      // 該当VCの通知メッセージが記録されていた場合
-      if (logData) {
-        const { messageId, channelId } = logData;
-
-        // 修正点：チャンネル名ではなく、保存しておいたチャンネルIDからチャンネル取得
-        const textChannel = oldState.guild.channels.cache.get(channelId);
-
+      // 該当の通知メッセージが記録されていた場合
+      if (messageId) {
+        const textChannel = oldState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
         if (textChannel && textChannel.isTextBased()) {
           try {
             const msg = await textChannel.messages.fetch(messageId);
             await msg.delete(); // 通知メッセージを削除
           } catch {
-            console.log("⚠ 通知メッセージ削除失敗（すでに削除済みの可能性）");
+            console.log("⚠ 通知メッセージ削除失敗（既に削除済み）");
           }
         }
 
         // 通知ログから削除
-        messageLog.delete(logKey);
+        messageLog.delete(`${oldState.guild.id}-${vcName}`);
       }
     }
   }
