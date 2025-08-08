@@ -56,11 +56,8 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
           `**${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪`
         );
 
-        // 通知メッセージIDとチャンネルIDを記録（後で削除時に使う）
-        messageLog.set(`${newState.guild.id}-${vcName}`, {
-          messageId: message.id,
-          channelId: textChannel.id
-        });
+        // 通知メッセージIDを記録（後で削除時に使う）
+        messageLog.set(`${newState.guild.id}-${vcName}`, message.id);
       }
     }
   }
@@ -76,22 +73,17 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
     // VCが空（誰もいなくなった）になった時
     if (memberCount === 0) {
-      const logKey = `${oldState.guild.id}-${vcName}`;
-      const logData = messageLog.get(logKey);
+      const messageId = messageLog.get(`${oldState.guild.id}-${vcName}`);
 
-      // 該当VCの通知メッセージが記録されていた場合
-      if (logData) {
-        const { messageId, channelId } = logData;
-
-        // 修正点：チャンネル名ではなく、保存しておいたチャンネルIDからチャンネル取得
-        const textChannel = oldState.guild.channels.cache.get(channelId);
-
+      // 該当の通知メッセージが記録されていた場合
+      if (messageId) {
+        const textChannel = oldState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
         if (textChannel && textChannel.isTextBased()) {
           try {
             const msg = await textChannel.messages.fetch(messageId);
             await msg.delete(); // 通知メッセージを削除
           } catch {
-            console.log("⚠ 通知メッセージ削除失敗（すでに削除済みの可能性）");
+            console.log("⚠ 通知メッセージ削除失敗（既に削除済み）");
           }
         }
 
@@ -109,4 +101,3 @@ client.login(TOKEN);
 Deno.cron("Continuous Request", "*/2 * * * *", () => {
     console.log("running...");
 });
-
