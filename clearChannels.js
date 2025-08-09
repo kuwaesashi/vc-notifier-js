@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits } from "npm:discord.js@14.14.1";
+import { Client, GatewayIntentBits, Partials, TextChannel, Collection, Message } from "npm:discord.js@14.14.1";
 
 const TOKEN = Deno.env.get("DISCORD_TOKEN");
 
@@ -9,32 +9,53 @@ const TARGET_CHANNEL_NAMES = [
 ];
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  partials: [Partials.Channel],
 });
 
-client.once("ready", async () => {
-  console.log("🧹 定期削除開始");
+// 使い回しの全削除関数（main と同じ）
+async function purgeAllMessages(ch: TextChannel) {
+  const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
+  let before: string | undefined = undefined;
+  while (true) {
+    const batch: Collection<string, Message> = await ch.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (batch.size === 0) break;
+    const now = Date.now();
+    const younger = batch.filter(m => (now - m.createdTimestamp) < TWO_WEEKS);
+    const older   = batch.filter(m => (now - m.createdTimestamp) >= TWO_WEEKS);
+    if (younger.size > 0) await ch.bulkDelete(younger, true).catch(()=>{});
+    for (const [, msg] of older) { await msg.delete().catch(()=>{}); await new Promise(r=>setTimeout(r,150)); }
+    before = batch.last()?.id;
+  }
+}
 
-  for (const guild of client.guilds.cache.values()) {
-    for (const [channelId, channel] of guild.channels.cache) {
-      if (
-        TARGET_CHANNEL_NAMES.includes(channel.name) &&
-        channel.isTextBased()
-      ) {
-        try {
-          const messages = await channel.messages.fetch({ limit: 100 });
-          for (const msg of messages.values()) {
-            await msg.delete();
-          }
-          console.log(`✅ ${channel.name} のメッセージを削除しました`);
-        } catch (err) {
-          console.error(`⚠ ${channel.name} の削除に失敗しました`, err);
+client.on("ready", async () => {
+  console.log(`🧹 clear worker ready: ${client.user?.tag}`);
+
+  // 起動時に一度キャッシュを埋める
+  for (const [, gRef] of client.guilds.cache) {
+    const guild = await gRef.fetch();
+    await guild.channels.fetch().catch(()=>{});
+  }
+
+  // 毎日 JST 4:00 に実行（UTC 19:00）
+  Deno.cron("Nightly Purge 4AM JST", "0 19 * * *", async () => {
+    console.log("[cron] 4AM JST purge start");
+    for (const [, gRef] of client.guilds.cache) {
+      const guild = await gRef.fetch();
+      await guild.channels.fetch().catch(()=>{});
+      for (const ch of guild.channels.cache.values()) {
+        if (TARGET_CHANNEL_NAMES.includes(ch.name) && ch.isTextBased()) {
+          console.log(`[cron] purge #${ch.name}`);
+          await purgeAllMessages(ch as TextChannel).catch(e => console.log("purge error:", e));
         }
       }
     }
-  }
+    console.log("[cron] purge end");
+  });
 
-  client.destroy(); // 処理後にログアウト
+  // keep alive (ログ)
+  Deno.cron("heartbeat", "*/5 * * * *", () => console.log("clear worker running..."));
 });
 
 client.login(TOKEN);
