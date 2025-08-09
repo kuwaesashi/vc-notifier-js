@@ -1,5 +1,5 @@
 // Discord.js の必要なクラス・定数をインポート（Deno環境対応）
-import { Client, GatewayIntentBits, Partials, EmbedBuilder, TextChannel, Collection, Message } from "npm:discord.js@14.14.1";
+import { Client, GatewayIntentBits, Partials, EmbedBuilder } from "npm:discord.js@14.14.1";
 
 // 環境変数からトークン取得
 const TOKEN = Deno.env.get("DISCORD_TOKEN");
@@ -23,12 +23,12 @@ const VC_TO_TEXT = {
 };
 
 // === 全削除（確実版）：14日以内は bulkDelete、超過分は個別削除＋ページング ===
-async function purgeAllMessages(ch: TextChannel) {
+async function purgeAllMessages(ch) {
   const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
-  let before: string | undefined = undefined;
+  let before = undefined; // ページング用カーソル
 
   while (true) {
-    const batch: Collection<string, Message> = await ch.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    const batch = await ch.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
     if (batch.size === 0) break;
 
     const now = Date.now();
@@ -40,7 +40,7 @@ async function purgeAllMessages(ch: TextChannel) {
     }
     for (const [, msg] of older) {
       await msg.delete().catch(() => {});
-      await new Promise(res => setTimeout(res, 150)); // すこし待ってレートリミット緩和
+      await new Promise(res => setTimeout(res, 150)); // レートリミット緩和
     }
 
     before = batch.last()?.id; // 次ページへ
@@ -114,7 +114,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
         // 全メッセージ削除関数を呼び出し
         // 失敗した場合はエラー内容をログに出す
-        await purgeAllMessages(textChannel as TextChannel)
+        await purgeAllMessages(textChannel)
           .catch(e => console.log("purge error:", e));
       }
 
@@ -131,4 +131,5 @@ client.login(TOKEN);
 Deno.cron("Continuous Request", "*/2 * * * *", () => {
     console.log("running...");
 });
+
 
