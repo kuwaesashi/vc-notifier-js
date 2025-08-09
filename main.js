@@ -1,5 +1,5 @@
 // Discord.js の必要なクラス・定数をインポート（Deno環境対応）
-import { Client, GatewayIntentBits, Partials, EmbedBuilder } from "npm:discord.js@14.14.1";
+import { Client, GatewayIntentBits, Partials, EmbedBuilder, TextChannel, Collection, Message } from "npm:discord.js@14.14.1";
 
 // 環境変数からトークン取得
 const TOKEN = Deno.env.get("DISCORD_TOKEN");
@@ -9,7 +9,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,            // サーバー（ギルド）情報の取得
     GatewayIntentBits.GuildVoiceStates,  // VCの入退室イベントを受け取る
-    GatewayIntentBits.GuildMembers       // メンバー情報を取得（displayName用）
+    GatewayIntentBits.GuildMembers,       // メンバー情報を取得（displayName用）
+    GatewayIntentBits.GuildMessages, // ★追加：履歴取得/削除に必要
   ],
   partials: [Partials.Channel],          // チャンネル情報の一部欠損に対応するための設定
 });
@@ -21,14 +22,45 @@ const VC_TO_TEXT = {
   "共通相互作業部屋": "共通相互通話募集（自動）"
 };
 
+// === 全削除（確実版）：14日以内は bulkDelete、超過分は個別削除＋ページング ===
+async function purgeAllMessages(ch: TextChannel) {
+  const TWO_WEEKS = 14 * 24 * 60 * 60 * 1000;
+  let before: string | undefined = undefined;
+
+  while (true) {
+    const batch: Collection<string, Message> = await ch.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (batch.size === 0) break;
+
+    const now = Date.now();
+    const younger = batch.filter(m => (now - m.createdTimestamp) < TWO_WEEKS);
+    const older   = batch.filter(m => (now - m.createdTimestamp) >= TWO_WEEKS);
+
+    if (younger.size > 0) {
+      await ch.bulkDelete(younger, true).catch(() => {});
+    }
+    for (const [, msg] of older) {
+      await msg.delete().catch(() => {});
+      await new Promise(res => setTimeout(res, 150)); // すこし待ってレートリミット緩和
+    }
+
+    before = batch.last()?.id; // 次ページへ
+  }
+};
+
 // 通知で送信したメッセージとテキストチャンネルIDを記録する Map
 // Key: ${guildId}-${vcName}
 // Value: { messageId, channelId }
 const messageLog = new Map();
 
 // BOT起動時に一度だけ呼ばれるイベント
-client.on("ready", () => {
+client.on("ready", async () => {
   console.log(`BOT起動完了: ${client.user.tag}`);
+
+  // 参加している全サーバーのチャンネル一覧を事前にキャッシュに読み込む
+  for (const [, gRef] of client.guilds.cache) {
+    const g = await gRef.fetch(); // 最新情報を取得
+    await g.channels.fetch().catch(() => {}); // チャンネルキャッシュを更新
+  }
 });
 
 // VCの入退室を検知するイベントハンドラ
@@ -71,25 +103,23 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
     const memberCount = oldState.channel.members.size;
 
-    // VCが空（誰もいなくなった）になった時
+    // VCが空（誰もいなくなった）になった時の処理
     if (memberCount === 0) {
-      const messageId = messageLog.get(`${oldState.guild.id}-${vcName}`);
+      // 対応するテキストチャンネルを名前から取得
+      const textChannel = oldState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
 
-      // 該当の通知メッセージが記録されていた場合
-      if (messageId) {
-        const textChannel = oldState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
-        if (textChannel && textChannel.isTextBased()) {
-          try {
-            const msg = await textChannel.messages.fetch(messageId);
-            await msg.delete(); // 通知メッセージを削除
-          } catch {
-            console.log("⚠ 通知メッセージ削除失敗（既に削除済み）");
-          }
-        }
+      // チャンネルが存在していて、テキスト送受信が可能な場合のみ処理
+      if (textChannel && textChannel.isTextBased()) {
+        console.log(`VC「${vcName}」が0人になったため、#${textChannel.name} を全削除します`);
 
-        // 通知ログから削除
-        messageLog.delete(`${oldState.guild.id}-${vcName}`);
+        // 全メッセージ削除関数を呼び出し
+        // 失敗した場合はエラー内容をログに出す
+        await purgeAllMessages(textChannel as TextChannel)
+          .catch(e => console.log("purge error:", e));
       }
+
+      // 通知メッセージの記録が残っていると後で不要に参照されるため、ここでクリア
+      messageLog.delete(`${oldState.guild.id}-${vcName}`);
     }
   }
 });
@@ -101,3 +131,4 @@ client.login(TOKEN);
 Deno.cron("Continuous Request", "*/2 * * * *", () => {
     console.log("running...");
 });
+
