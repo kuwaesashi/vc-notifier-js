@@ -226,6 +226,4 @@ Deno.cron("Continuous Request", "*/2 * * * *", () => {
 // ヘルスチェック（200 OKを返す）
 Deno.serve(() => new Response("ok"));
 
-// ヘルスチェック（200 OKを返す）
-Deno.serve(() => new Response("ok"));
 
