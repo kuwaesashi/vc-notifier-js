@@ -1,6 +1,14 @@
 // Discord.js の必要なクラス・定数をインポート（Deno環境対応）
 import { Client, GatewayIntentBits, Partials, EmbedBuilder } from "npm:discord.js@14.14.1";
 
+// 起動時のクラッシュログを拾う
+addEventListener("unhandledrejection", (e) => {
+  console.error("[unhandledrejection]", e.reason ?? e);
+});
+addEventListener("error", (e) => {
+  console.error("[error]", e.message ?? e);
+});
+
 // 環境変数からトークン取得
 const TOKEN = Deno.env.get("DISCORD_TOKEN");
 
@@ -124,6 +132,13 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 });
 
+// トークン未設定で落ちないように
+if (!TOKEN) {
+  console.error("[fatal] DISCORD_TOKEN is not set");
+  // 落とさずに待機（cronやヘルスチェックは残す）
+  // return; ← モジュールのトップレベルなら書かず、そのままにしてOK
+}
+
 // Botを起動
 client.login(TOKEN);
 
@@ -132,4 +147,6 @@ Deno.cron("Continuous Request", "*/2 * * * *", () => {
     console.log("running...");
 });
 
+// ヘルスチェック用のHTTPレスポンス（常に 200 OK を返す）
+Deno.serve(() => new Response("ok"));
 
