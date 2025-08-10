@@ -163,7 +163,29 @@ if (!TOKEN) {
 }
 
 // Botを起動
-client.login(TOKEN);
+const DEPLOY_ID = Deno.env.get("DENO_DEPLOYMENT_ID") ?? crypto.randomUUID();
+const kv = await Deno.openKv();
+const LOCK_KEY = ["singleton", "voice-bot"];
+
+// 既存ロックが無い場合のみセット（原子的に）
+const locked = await kv.atomic()
+  .check({ key: LOCK_KEY, versionstamp: null }) // 無ければOK
+  .set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 }) // 60秒で失効
+  .commit();
+
+if (locked.ok) {
+  console.log("[singleton] acquired, starting bot", DEPLOY_ID);
+
+  // ロック更新（1分ごとに延長）
+  Deno.cron("singleton-renew", "*/1 * * * *", async () => {
+    await kv.set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 });
+  });
+
+  // ここで初めてログイン
+  client.login(TOKEN);
+} else {
+  console.log("[singleton] another instance is active; skipping login");
+}
 
 // 24時間稼働
 Deno.cron("Continuous Request", "*/2 * * * *", () => {
@@ -172,6 +194,7 @@ Deno.cron("Continuous Request", "*/2 * * * *", () => {
 
 // ヘルスチェック用のHTTPレスポンス（常に 200 OK を返す）
 Deno.serve(() => new Response("ok"));
+
 
 
 
