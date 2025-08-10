@@ -162,10 +162,12 @@ if (!TOKEN) {
   // return; ← モジュールのトップレベルなら書かず、そのままにしてOK
 }
 
-// Botを起動（シングルトン＋リトライ付き）
+// Botを起動（シングルトン＋リトライ付き・cronはトップレベルのみ）
 const DEPLOY_ID = Deno.env.get("DENO_DEPLOYMENT_ID") ?? crypto.randomUUID();
 const kv = await Deno.openKv();
-const LOCK_KEY = ["singleton", "voice-bot"]; // 他プロジェクトと被らないならこのままでOK
+const LOCK_KEY = ["singleton", "voice-bot"]; // 必要なら固有名を追加
+
+let renewTimer = null;
 
 async function tryAcquireAndStart() {
   // 既存ロックの腐りチェック（古すぎたら破棄）
@@ -191,14 +193,15 @@ async function tryAcquireAndStart() {
   if (tx.ok) {
     console.log("[singleton] acquired, starting bot", DEPLOY_ID);
 
-    // 1分ごとにロック延長（失敗してもBotは継続）
-    Deno.cron("singleton-renew", "*/1 * * * *", async () => {
+    // ★ ロック延長は setInterval で（cron はトップレベルのみ可）
+    if (renewTimer) clearInterval(renewTimer);
+    renewTimer = setInterval(async () => {
       try {
         await kv.set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 });
       } catch (e) {
         console.error("[singleton-renew error]", e);
       }
-    });
+    }, 30_000); // 30秒ごと更新
 
     // 実ログイン
     try {
@@ -208,17 +211,21 @@ async function tryAcquireAndStart() {
     }
   } else {
     console.log("[singleton] lock not acquired. retry in 15s");
-    setTimeout(tryAcquireAndStart, 15_000); // ★ここで再試行
+    setTimeout(tryAcquireAndStart, 15_000); // 取れるまで再試行
   }
 }
 
 // 起動トリガ
 tryAcquireAndStart();
 
-// 24時間稼働ログ（任意）
+// 24時間稼働ログ（トップレベルの cron はOK）
 Deno.cron("Continuous Request", "*/2 * * * *", () => {
   console.log("running...");
 });
 
 // ヘルスチェック（200 OKを返す）
 Deno.serve(() => new Response("ok"));
+
+// ヘルスチェック（200 OKを返す）
+Deno.serve(() => new Response("ok"));
+
