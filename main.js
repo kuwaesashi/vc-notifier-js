@@ -92,6 +92,20 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
       // チャンネルが存在し、テキストベースであれば通知を送信
       if (textChannel && textChannel.isTextBased()) {
+
+        // ← 重複送信ガード
+        try {
+          const last = await textChannel.messages.fetch({ limit: 1 });
+          const lastMsg = last.first();
+          const justSentByMe = lastMsg
+            && lastMsg.author?.id === client.user.id
+            && lastMsg.createdTimestamp > Date.now() - 10_000; // 10秒以内
+          if (justSentByMe) {
+            console.log("[notify-skip] 最近Botが同種メッセージを送っているためスキップ");
+            return;
+          }
+        } catch { /* 取得失敗は無視して続行 */ }
+        
         const message = await textChannel.send(
           `**${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪`
         );
@@ -149,4 +163,5 @@ Deno.cron("Continuous Request", "*/2 * * * *", () => {
 
 // ヘルスチェック用のHTTPレスポンス（常に 200 OK を返す）
 Deno.serve(() => new Response("ok"));
+
 
