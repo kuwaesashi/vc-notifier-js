@@ -162,54 +162,63 @@ if (!TOKEN) {
   // return; ← モジュールのトップレベルなら書かず、そのままにしてOK
 }
 
-// Botを起動
+// Botを起動（シングルトン＋リトライ付き）
 const DEPLOY_ID = Deno.env.get("DENO_DEPLOYMENT_ID") ?? crypto.randomUUID();
 const kv = await Deno.openKv();
-const LOCK_KEY = ["singleton", "voice-bot"]; // プロジェクト固有にしたければ末尾にプロジェクト名を足す
+const LOCK_KEY = ["singleton", "voice-bot"]; // 他プロジェクトと被らないならこのままでOK
 
-// 既存ロックの腐りチェック
-const existing = await kv.get(LOCK_KEY);
-if (existing.value) {
-  const age = Date.now() - (existing.value.ts ?? 0);
-  if (age > 90_000) { // 90秒以上古いロックは無効化
-    console.warn("[singleton] stale lock detected (age=%d ms). Clearing.", age);
-    await kv.delete(LOCK_KEY);
+async function tryAcquireAndStart() {
+  // 既存ロックの腐りチェック（古すぎたら破棄）
+  try {
+    const existing = await kv.get(LOCK_KEY);
+    if (existing.value) {
+      const age = Date.now() - (existing.value.ts ?? 0);
+      if (age > 90_000) {
+        console.warn("[singleton] stale lock detected (age=%d ms). Clearing.", age);
+        await kv.delete(LOCK_KEY);
+      }
+    }
+  } catch (e) {
+    console.error("[singleton] precheck error", e);
+  }
+
+  // 原子的にロック取得
+  const tx = await kv.atomic()
+    .check({ key: LOCK_KEY, versionstamp: null })
+    .set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 })
+    .commit();
+
+  if (tx.ok) {
+    console.log("[singleton] acquired, starting bot", DEPLOY_ID);
+
+    // 1分ごとにロック延長（失敗してもBotは継続）
+    Deno.cron("singleton-renew", "*/1 * * * *", async () => {
+      try {
+        await kv.set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 });
+      } catch (e) {
+        console.error("[singleton-renew error]", e);
+      }
+    });
+
+    // 実ログイン
+    try {
+      await client.login(TOKEN);
+    } catch (e) {
+      console.error("[login error]", e);
+    }
+  } else {
+    console.log("[singleton] lock not acquired. retry in 15s");
+    setTimeout(tryAcquireAndStart, 15_000); // ★ここで再試行
   }
 }
 
-// 原子的に取得
-const locked = await kv.atomic()
-  .check({ key: LOCK_KEY, versionstamp: null })
-  .set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 })
-  .commit();
+// 起動トリガ
+tryAcquireAndStart();
 
-if (locked.ok) {
-  console.log("[singleton] acquired, starting bot", DEPLOY_ID);
-
-  // 1分ごとにロック延長（更新失敗時はログ出す）
-  Deno.cron("singleton-renew", "*/1 * * * *", async () => {
-    try {
-      await kv.set(LOCK_KEY, { id: DEPLOY_ID, ts: Date.now() }, { expireIn: 60_000 });
-    } catch (e) {
-      console.error("[singleton-renew error]", e);
-    }
-  });
-
-  // ここでログイン
-  client.login(TOKEN).catch(e => console.error("[login error]", e));
-} else {
-  console.error("[singleton] lock not acquired. Someone else active?"); // ここが出たらまだ競合
-}
-
-// 24時間稼働
+// 24時間稼働ログ（任意）
 Deno.cron("Continuous Request", "*/2 * * * *", () => {
-    console.log("running...");
+  console.log("running...");
 });
 
-// ヘルスチェック用のHTTPレスポンス（常に 200 OK を返す）
+// ヘルスチェック（200 OKを返す）
 Deno.serve(() => new Response("ok"));
-
-
-
-
-
