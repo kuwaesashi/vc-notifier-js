@@ -162,21 +162,28 @@ if (!TOKEN) {
   // return; ← モジュールのトップレベルなら書かず、そのままにしてOK
 }
 
-// Botを起動（シングルトン＋リトライ付き・cronはトップレベルのみ）
+// Botを起動（シングルトン＋リトライ＆強制アンロック対応）
 const DEPLOY_ID = Deno.env.get("DENO_DEPLOYMENT_ID") ?? crypto.randomUUID();
 const kv = await Deno.openKv();
-const LOCK_KEY = ["singleton", "voice-bot"]; // 必要なら固有名を追加
+// ← 他プロジェクトと被らないように末尾を固有化しておくのが吉（例: "main"）
+const LOCK_KEY = ["singleton", "voice-bot", "main"];
 
+const FORCE_UNLOCK = Deno.env.get("FORCE_UNLOCK") === "1"; // 一時的な強制解除フラグ
 let renewTimer = null;
 
-async function tryAcquireAndStart() {
-  // 既存ロックの腐りチェック（古すぎたら破棄）
+async function tryAcquireAndStart(retryCount = 0) {
   try {
+    // 既存ロック状況を確認
     const existing = await kv.get(LOCK_KEY);
     if (existing.value) {
       const age = Date.now() - (existing.value.ts ?? 0);
-      if (age > 90_000) {
-        console.warn("[singleton] stale lock detected (age=%d ms). Clearing.", age);
+      const holder = existing.value.id ?? "unknown";
+      console.log("[singleton] lock owner=%s age=%dms", holder, age);
+
+      // 強制解除が指定されている or ロックが古い → 解除
+      if (FORCE_UNLOCK || age > 90_000) {
+        console.warn("[singleton] %s. Clearing lock.",
+          FORCE_UNLOCK ? "FORCE_UNLOCK set" : `stale lock (age=${age}ms)`);
         await kv.delete(LOCK_KEY);
       }
     }
@@ -193,7 +200,7 @@ async function tryAcquireAndStart() {
   if (tx.ok) {
     console.log("[singleton] acquired, starting bot", DEPLOY_ID);
 
-    // ★ ロック延長は setInterval で（cron はトップレベルのみ可）
+    // ロック延長（cronはトップレベル限定なので setInterval で）
     if (renewTimer) clearInterval(renewTimer);
     renewTimer = setInterval(async () => {
       try {
@@ -201,17 +208,21 @@ async function tryAcquireAndStart() {
       } catch (e) {
         console.error("[singleton-renew error]", e);
       }
-    }, 30_000); // 30秒ごと更新
+    }, 30_000);
 
-    // 実ログイン
     try {
       await client.login(TOKEN);
     } catch (e) {
       console.error("[login error]", e);
     }
   } else {
+    // 取れなかった → 再試行（60秒経過後は一度だけ強制解除を試す）
+    if (retryCount === 4 && !FORCE_UNLOCK) {
+      console.warn("[singleton] still not acquired after 60s. Next retry will force unlock.");
+      Deno.env.set?.("FORCE_UNLOCK", "1"); // デプロイ中のみ有効な疑似フラグ
+    }
     console.log("[singleton] lock not acquired. retry in 15s");
-    setTimeout(tryAcquireAndStart, 15_000); // 取れるまで再試行
+    setTimeout(() => tryAcquireAndStart(retryCount + 1), 15_000);
   }
 }
 
@@ -225,5 +236,6 @@ Deno.cron("Continuous Request", "*/2 * * * *", () => {
 
 // ヘルスチェック（200 OKを返す）
 Deno.serve(() => new Response("ok"));
+
 
 
