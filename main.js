@@ -80,6 +80,8 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   if (oldState.channelId !== newState.channelId && newState.channel) {
     const vcName = newState.channel.name;
 
+     console.log("[join] vc=%s members=%d map=%s",vcName, newState.channel.members.size, VC_TO_TEXT[vcName] ?? "NONE");
+
     // VC名が通知対象外なら無視
     if (!VC_TO_TEXT[vcName]) return;
 
@@ -89,6 +91,8 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     if (memberCount === 1) {
       // 対応するテキストチャンネルを取得（チャンネル名で取得）
       const textChannel = newState.guild.channels.cache.find(c => c.name === VC_TO_TEXT[vcName]);
+
+      console.log("[dest] textCh=%s", textChannel?.name ?? "NOT_FOUND");
 
       // チャンネルが存在し、テキストベースであれば通知を送信
       if (textChannel && textChannel.isTextBased()) {
@@ -106,12 +110,17 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
           }
         } catch { /* 取得失敗は無視して続行 */ }
         
-        const message = await textChannel.send(
-          `**${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪`
-        );
+        try {
+            const message = await textChannel.send(
+              `**${member.displayName}** が「${vcName}」に入室しました！\nお時間合う方は作業ご一緒してください♪`
+            );
 
-        // 通知メッセージIDを記録（後で削除時に使う）
-        messageLog.set(`${newState.guild.id}-${vcName}`, message.id);
+            // 通知メッセージIDを記録（後で削除時に使う）
+            messageLog.set(`${newState.guild.id}-${vcName}`, message.id);
+             console.log("[sent] id=%s", message.id);
+        } catch (e) {
+              console.error("[send-error]", e);
+        }
       }
     }
   }
@@ -163,5 +172,6 @@ Deno.cron("Continuous Request", "*/2 * * * *", () => {
 
 // ヘルスチェック用のHTTPレスポンス（常に 200 OK を返す）
 Deno.serve(() => new Response("ok"));
+
 
 
